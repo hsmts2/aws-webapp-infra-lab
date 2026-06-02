@@ -1,0 +1,43 @@
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# AWS credentials / secrets
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+.env
+.env.*
+aws-credentials*
+credentials
+config
+
+# Parameters
+parameters/*.env
+parameters/*.json
+!parameters/*.example.json
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+*.tmp
+*.bak
+*.swp
+
+# Python / Node / Ruby local
+__pycache__/
+node_modules/
+vendor/bundle/
+.bundle/
+
+# Terraform, if used later
+.terraform/
+*.tfstate
+*.tfstate.*
