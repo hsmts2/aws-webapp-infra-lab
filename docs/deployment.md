@@ -1,113 +1,131 @@
+# deployment.md — デプロイ手順
 
+CloudFormation でインフラを作成し、Webサーバーにアプリを導入するまでの流れ。
 
-# architecture.md — 構成の説明
+## 0. 事前準備
 
-『AWSではじめるインフラ構築入門 第2版』の構成を CloudFormation で再現したもの。
-このドキュメントは「何を・なぜ」その構成にしているかを説明する。手順は `deployment.md` を参照。
+| 項目 | 内容 |
+|---|---|
+| AWS CLI | インストール済み（`aws --version`） |
+| 認証情報 | `aws configure` 済み（`aws sts get-caller-identity` で確認） |
+| EC2キーペア | 作成済み（既定名 `sample-key`） |
+| グローバルIP | 踏み台SSH許可元。`YourIpCidr` に /32 で設定推奨 |
+| ドメイン（任意） | 使う場合のみ Route 53 パブリックHostedZoneを用意 |
 
-## 全体構成
+## 1. パラメータ準備
 
-```
-Internet
-  │
-  ├─（HTTP:80）  ドメイン未設定時 → ALB がそのままターゲットへ転送
-  └─（HTTPS:443）ドメイン設定時   → ALB が HTTPS終端、80はHTTPSへリダイレクト
-                                      ※ACM証明書・公開Route53は任意（既定では作らない）
-  ↓
-Application Load Balancer（sample-elb / public subnet × 2）
-  ↓ HTTP:3000   ★Nginxを経由せず Puma に直結
-Web EC2（web01 / web02、private subnet × 2）で Puma/Rails が稼働
-  ├─ RDS for MySQL（sample-db、private subnet、Secrets Managerでパスワード管理）
-  ├─ S3（画像アップロード用バケット）
-  └─ ElastiCache for Redis（sample-elasticache、2シャード/2レプリカ）
-
-SES はメール送受信に使うが、本番アクセス申請やSMTP認証情報が絡むため
-CloudFormationでは作らず、手順メモとアプリ側の環境変数で扱う。
+```bash
+cp parameters/study.example.env parameters/study.env
+vi parameters/study.env     # YourIpCidr などを実値に
 ```
 
-## ネットワーク
+ドメインを使わない場合は `DomainName` と `PublicHostedZoneId` を空のままにする
+（ACM・HTTPS・公開Route53は作られない）。
 
-| 項目 | 値 | 備考 |
-|---|---|---|
-| VPC CIDR | 10.0.0.0/16 | 書籍と同じ |
-| Public Subnet 01 / 02 | 10.0.0.0/20 / 10.0.16.0/20 | ap-northeast-1a / 1c |
-| Private Subnet 01 / 02 | 10.0.64.0/20 / 10.0.80.0/20 | ap-northeast-1a / 1c |
-| NAT Gateway | 2つ（各AZに1つ） | sample-ngw-01 / sample-ngw-02 |
-| Route Table | public 共通1つ、private はAZごとに分離 | private01→ngw-01、private02→ngw-02 |
+## 2. テンプレート検証
 
-RDS は書籍に合わせて **Private サブネット**（private01 / private02）に配置する。
-DB専用サブネット層は作らない（書籍構成に忠実）。
+```bash
+aws cloudformation validate-template \
+  --template-body file://templates/aws-webapp-infra-lab.yaml
+```
 
-## セキュリティグループ
+## 3. スタック作成
 
-| SG | インバウンド | 用途 |
-|---|---|---|
-| sample-sg-elb | 80, 443（0.0.0.0/0） | ALB |
-| sample-sg-bastion | 22（YourIpCidr） | 踏み台 |
-| sample-sg-web | 22（bastionから）, 80/3000（ALBから） | Web |
-| sample-sg-db | 3306（webから） | RDS |
-| sample-sg-elasticache | 6379（webから） | Redis |
+```bash
+aws cloudformation deploy \
+  --template-file templates/aws-webapp-infra-lab.yaml \
+  --stack-name aws-webapp-infra-lab \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --parameter-overrides $(cat parameters/study.env)
+```
 
-> 書籍の手作業構成ではWeb SGに3000番が無い場合があるが、本テンプレートでは
-> ALBがPumaに直結するため、Web SGに 3000番（ソース=ALB SG）を明示的に開けている。
+> `CAPABILITY_NAMED_IAM` は、名前付きIAMロール（sample-role-web）を作るために必要。
 
-## ALB と Puma 直結（重要）
+## 4. 出力値の確認
 
-ターゲットグループ `sample-tg` のプロトコル:ポートは **HTTP:3000**。
-ALB は Nginx(80) ではなく **Puma(3000) に直接** トラフィックを送る。
+```bash
+aws cloudformation describe-stacks \
+  --stack-name aws-webapp-infra-lab \
+  --query "Stacks[0].Outputs" --output table
+```
 
-この構成では、CSS等の静的ファイルを **Rails自身が配信する** 必要があるため、
-アプリ起動時に `RAILS_SERVE_STATIC_FILES=1` が必須。これが無いとCSSが404になる。
-詳細は `troubleshooting.md` を参照。
+`BastionPublicIp`、`AlbDnsName`、`DbEndpoint`、`ImageBucketName`、`RedisEndpoint`、
+`DbMasterSecretArn` などが得られる。
 
-## RDS パスワードの管理
+## 5. アプリ導入に必要な値をSSMから取得
 
-`ManageMasterUserPassword: true` により、パスワードは **Secrets Manager** が
-自動生成・管理する。CloudFormation は Secret 本体ではなく、その **ARN(参照)** を
-SSM Parameter Store（`/<ProjectName>/rds/master-secret-arn`）に保存する。
+```bash
+PROJECT=sample
 
-- メリット: パスワードがテンプレートやログに平文で残らない。ローテーションも可能。
-- アプリ側は、SSMからARN→Secrets Managerから実パスワードを取得して `.bash_profile` に設定する。
+aws ssm get-parameter --name /$PROJECT/rds/endpoint --query Parameter.Value --output text
+aws ssm get-parameter --name /$PROJECT/s3/image-bucket --query Parameter.Value --output text
+aws ssm get-parameter --name /$PROJECT/elasticache/endpoint --query Parameter.Value --output text
 
-## SSM Parameter Store に保存する値
+# RDSパスワード（Secrets Manager管理）
+SECRET_ARN=$(aws ssm get-parameter --name /$PROJECT/rds/master-secret-arn --query Parameter.Value --output text)
+aws secretsmanager get-secret-value --secret-id "$SECRET_ARN" --query SecretString --output text
+# → JSONの "password" がマスター(admin)のパスワード
+```
 
-アプリ側の環境変数設定を楽にするため、主要な値をSSMに保存している。
+## 6. RDSにアプリ用DB/ユーザーを作成
 
-| パラメータ名 | 内容 |
-|---|---|
-| /<ProjectName>/rds/master-secret-arn | RDSマスター認証情報のSecret ARN |
-| /<ProjectName>/rds/endpoint | RDSエンドポイント |
-| /<ProjectName>/s3/image-bucket | 画像バケット名 |
-| /<ProjectName>/elasticache/endpoint | Redis設定エンドポイント |
-| /<ProjectName>/alb/dns-name | ALBのDNS名 |
+bastion に SSH して、マスターユーザーで `sample_app` DB と専用ユーザーを作る。
 
-## プライベートDNS（home ゾーン）
+```bash
+# 手元PCから踏み台へ
+ssh -i path/to/sample-key.pem ec2-user@<BastionPublicIp>
 
-VPC内専用の Route 53 プライベートホストゾーン `home` を作成し、以下を登録する。
-アプリは `db.home` 等の名前で各サービスを参照する。
+# 踏み台からRDSへ（SQLは scripts/db/create-sample-app-db.sql を用意して流す）
+mysql -u admin -p -h db.home < create-sample-app-db.sql
+```
 
-| レコード | 種別 | 向き先 |
-|---|---|---|
-| bastion.home | A | 踏み台のプライベートIP |
-| web01.home / web02.home | A | 各WebのプライベートIP |
-| db.home | CNAME | RDSエンドポイント |
-| cache.home | CNAME | Redis設定エンドポイント |
+## 7. Webサーバーへアプリ導入（web01 → web02）
 
-## 任意（ドメイン運用時のみ作成）
+各Webサーバーで scripts/web/ を順に実行する。SSH接続は `setup-notes.md` を参照。
 
-`DomainName` と `PublicHostedZoneId` を両方指定したときだけ作成される。
-既定（空）では作られない。
+```bash
+# 踏み台経由でWebへ
+ssh web01
 
-- ACM証明書（www.<domain> のDNS検証）
-- HTTPS:443 リスナー
-- HTTP:80 → HTTPS リダイレクト
-- 公開Route53レコード（www.<domain>、bastion.<domain>）
+# ---- ここから web01 上 ----
+# 01-02 は ec2-user（sudo）
+bash 01-install-middleware.sh
+bash 02-create-deploy-user.sh
 
-## CloudFormation で作らないもの
+# 03 以降は deploy
+sudo su - deploy
+bash 03-install-ruby.sh
+source ~/.bash_profile
 
-| 項目 | 理由 |
-|---|---|
-| SES（ドメイン検証・SMTP認証情報・本番アクセス申請） | UI操作・申請が絡むため手順メモで管理 |
-| サンプルアプリ本体（Ruby/Rails/Gem/Puma） | OS内部手順が多く、scripts/ と docs/ に分離 |
-| Route 53 ドメイン登録（取得） | ドメイン取得はCloudFormation対象外 |
-| 詳細なCloudWatchダッシュボード | 基本アラームのみ作成、詳細は手順メモ |
+# 05（環境変数）を先に：exampleをコピーして実値を埋めて実行
+cp 05-configure-env.sh.example 05-configure-env.sh
+vi 05-configure-env.sh        # SSM/Secrets Managerから取得した値を埋める
+bash 05-configure-env.sh
+source ~/.bash_profile
+
+# 04（アプリ取得・bundle・precompile）
+bash 04-deploy-sample-app.sh
+
+# DBマイグレーション（初回のみ。RDS共有なのでweb01で1回でよい）
+cd /var/www/aws-intro-sample-2nd
+bundle _1.17.3_ exec rails db:migrate RAILS_ENV=production
+
+# 06（Puma起動）
+bash 06-start-puma.sh
+```
+
+web02 でも同じ手順を実行する。ただし **db:migrate は不要**（RDS共有のため）。
+`SECRET_KEY_BASE` は web01 と同じ値にすること。
+
+## 8. ALBに登録して動作確認
+
+`06-start-puma.sh` の最後で `curl -I http://localhost:3000/assets/...css` が
+**200 OK** になっていることを確認してから、ALBターゲットグループにWebを登録する
+（CloudFormationで既に登録済みだが、unhealthyなら起動状態を確認）。
+
+ターゲットグループで web01 / web02 が **healthy** になればOK。
+`AlbDnsName`（またはドメイン）にブラウザでアクセスして、CSSが当たった画面を確認する。
+
+## 9. 削除
+
+`cost-cleanup.md` を参照。
