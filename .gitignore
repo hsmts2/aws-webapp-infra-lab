@@ -1,43 +1,43 @@
-# OS / Editor
-.DS_Store
-Thumbs.db
-.vscode/
-.idea/
+# ===== 秘匿情報・個人環境（絶対にコミットしない）=====
 
-# AWS credentials / secrets
+# 実値を埋めたパラメータファイル
+parameters/study.env
+parameters/*.env
+!parameters/*.example.env
+
+# 実値を埋めた環境変数スクリプト（SES認証情報・SECRET_KEY_BASE等を含む）
+scripts/web/05-configure-env.sh
+
+# 実値を埋めたDB初期化SQL（パスワードを含む）
+scripts/db/create-sample-app-db.sql
+
+# .bash_profile の実体
+**/.bash_profile
+bash_profile*
+*bash_profile
+
+# AWS認証情報・鍵
 *.pem
 *.key
-*.crt
-*.p12
-*.pfx
+.aws/
+credentials
+
+# 一般的な秘匿ファイル
 .env
 .env.*
-aws-credentials*
-credentials
-config
+!.env.example
+secrets*
+*secret*
+!*secret-arn*
 
-# Parameters
-parameters/*.env
-parameters/*.json
-!parameters/*.example.json
-
-# Logs
-*.log
-logs/
-
-# Temporary files
-tmp/
-*.tmp
-*.bak
+# ===== OS / エディタ =====
+.DS_Store
+Thumbs.db
 *.swp
+*~
+.idea/
+.vscode/
 
-# Python / Node / Ruby local
-__pycache__/
-node_modules/
-vendor/bundle/
-.bundle/
-
-# Terraform, if used later
-.terraform/
-*.tfstate
-*.tfstate.*
+# ===== ログ・一時 =====
+*.log
+tmp/
