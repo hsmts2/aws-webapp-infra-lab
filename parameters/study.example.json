@@ -1,0 +1,9 @@
+[
+  { "ParameterKey": "ProjectName", "ParameterValue": "sample" },
+  { "ParameterKey": "KeyName", "ParameterValue": "sample-key" },
+  { "ParameterKey": "YourIpCidr", "ParameterValue": "xxx.xxx.xxx.xxx/32" },
+  { "ParameterKey": "AlbTargetPort", "ParameterValue": "3000" },
+  { "ParameterKey": "S3AccessMode", "ParameterValue": "LeastPrivilege" },
+  { "ParameterKey": "DomainName", "ParameterValue": "" },
+  { "ParameterKey": "PublicHostedZoneId", "ParameterValue": "" }
+]
