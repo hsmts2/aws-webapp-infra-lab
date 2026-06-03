@@ -1,7 +1,7 @@
 # architecture.md
 
 本ドキュメントでは、『AWSではじめるインフラ構築入門 第2版』で学習したAWS構成をもとに、CloudFormationで構築するインフラ構成を整理します。
-あわせて、書籍の手作業構成と本リポジトリのCloudFormation構成との差分、およびその設計意図をまとめます。
+あわせて、書籍の手作業構成と本リポジトリのCloudFormation構成との差分、およびその設計意図をまとめます。<br>
 デプロイ手順の詳細は [deployment.md](deployment.md) に記載しています。
 
 <br>
