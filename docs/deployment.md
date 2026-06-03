@@ -63,7 +63,6 @@ PublicHostedZoneId=
 ```
 
 この場合、ACM証明書、HTTPSリスナー、公開Route 53レコードは作成されません。
-
 `parameters/study.env` は実環境の値を含むため、Git管理対象外にします。
 
 <br>
@@ -674,9 +673,7 @@ nohup bundle _1.17.3_ exec rails server \
 <br>
 
 ## 22. コスト管理と削除
-
-学習用スタックには、継続課金が発生するリソースが含まれます。
-
+スタックには、継続課金が発生するリソースが含まれます。
 特に以下のリソースは料金が大きくなりやすいため、学習完了後は必ず確認します。
 
 | 優先度 | リソース        | 理由                           |
@@ -691,8 +688,7 @@ nohup bundle _1.17.3_ exec rails server \
 <br>
 
 ## 23. CloudFormationスタックの削除
-
-学習が完了したら、CloudFormationスタックを削除します。
+CloudFormationスタックを削除します。
 
 ```bash
 aws cloudformation delete-stack \
@@ -726,14 +722,12 @@ CloudFormationスタック削除後も、保持設定や手動作成により一
 
 <br>
 
-## 25. セキュリティ後始末
-
-学習完了後は、不要な認証情報を削除します。
+## 25. セキュリティ
+不要な認証情報を削除します。
 
 * SES SMTP用IAMユーザーまたはアクセスキーを無効化・削除します。
-* 作業ログやスクリーンショットに認証情報が含まれていないか確認します。
 * `SECRET_KEY_BASE` やSMTP認証情報を公開リポジトリに含めないよう確認します。
 * `parameters/study.env` など、実環境の値を含むファイルがGit管理対象になっていないか確認します。
 
 <br>
-```
+
