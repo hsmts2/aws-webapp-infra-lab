@@ -6,6 +6,13 @@
 本リポジトリは、書籍で学習した AWS インフラ構成を、自分の理解に基づいて Infrastructure as Code として整理したものです。  
 書籍内容を転載するものではなく、学習した構成を CloudFormation テンプレート、補助スクリプト、構成メモとして再現・管理することを目的としています。
 
+## 関連ドキュメント
+
+| ドキュメント | 内容 |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | AWS構成、書籍構成との差分、設計意図 |
+| [docs/deployment.md](docs/deployment.md) | CloudFormationデプロイ、SSH設定、アプリ導入、SES設定、エラー対応、削除手順 |
+
 ---
 
 <br>
