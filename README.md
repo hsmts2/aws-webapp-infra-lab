@@ -98,14 +98,12 @@ aws-webapp-infra-lab/
 | Parameter      | Systems Manager Parameter Store への主要値・Secret ARN 保存                       |
 | 任意             | ACM 証明書、HTTPS:443 リスナー、公開 Route 53 レコード（ドメイン指定時のみ）                        |
 
-> NAT Gateway は書籍に合わせて **2つ**（`sample-ngw-01` / `sample-ngw-02`）作成します。
-> RDS は書籍に合わせて **Private サブネット** に配置します（DB専用サブネットは作成しません）。
 
 ---
 
 <br>
 
-## RDS パスワードの扱い
+## RDS パスワード
 
 RDS マスターパスワードは `ManageMasterUserPassword: true` により **Secrets Manager** が自動生成・管理します。
 CloudFormation は Secret 本体ではなく、その **Secret ARN** を Systems Manager Parameter Store（`/<ProjectName>/rds/master-secret-arn`）に保存します。
@@ -114,8 +112,6 @@ CloudFormation は Secret 本体ではなく、その **Secret ARN** を Systems
 
 なお、Secrets Manager で管理されるのは RDS マスターユーザー（`admin`）の認証情報です。
 Rails アプリケーションが接続に使用する `sample_app` ユーザーのパスワードは、DB 初期化時に別途設定し、アプリケーションの環境変数 `AWS_INTRO_SAMPLE_DATABASE_PASSWORD` に設定します。
-
-取得手順は [docs/deployment.md](docs/deployment.md) を参照してください。
 
 ---
 
@@ -133,8 +129,7 @@ Rails アプリケーションが接続に使用する `sample_app` ユーザー
 <br>
 
 ## 書籍との差分
-
-主な差分は以下の通りです。詳細は [docs/architecture.md](docs/architecture.md) の「書籍構成との差分」を参照してください。
+主な差分は以下の通りです。
 
 | 項目              | 書籍・手作業             | 本リポジトリ                           |
 | --------------- | ------------------ | -------------------------------- |
@@ -187,8 +182,6 @@ aws cloudformation deploy \
   --parameter-overrides $PARAMS
 ```
 
-アプリ導入を含む全体の流れは [docs/deployment.md](docs/deployment.md) を参照してください。
-
 ---
 
 <br>
@@ -212,8 +205,6 @@ nohup bundle _1.17.3_ exec rails server -e production -b 0.0.0.0 -p 3000 > log/p
 # CSSが崩れる場合の確認
 echo $RAILS_SERVE_STATIC_FILES   # 期待値: 1
 ```
-
-構築時の主なエラーと対応は [docs/deployment.md](docs/deployment.md) に整理しています。
 
 ---
 
@@ -261,9 +252,4 @@ aws cloudformation delete-stack \
 aws cloudformation wait stack-delete-complete \
   --stack-name aws-webapp-infra-lab
 ```
-
-削除後に残りやすいリソース（EIP、RDSスナップショット、S3、Secret等）の確認手順は [docs/deployment.md](docs/deployment.md) の「コスト管理と削除」を参照してください。
-
----
-
 <br>
