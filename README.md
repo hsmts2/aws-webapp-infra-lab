@@ -47,8 +47,6 @@ Puma / Rails on EC2（web01 / web02）
 
 Rails 側で CSS などの静的ファイルを返すため、アプリ起動時に `RAILS_SERVE_STATIC_FILES=1` が必須です。
 
-詳しい構成説明は [docs/architecture.md](docs/architecture.md) を参照してください。
-
 ---
 
 <br>
