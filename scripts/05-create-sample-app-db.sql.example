@@ -22,7 +22,7 @@ CREATE DATABASE IF NOT EXISTS sample_app
   COLLATE utf8mb4_general_ci;
 
 -- アプリ用ユーザー（パスワードは実値に置き換える）
-CREATE USER IF NOT EXISTS 'sample_app'@'%' IDENTIFIED BY 'YOUR_APP_DB_PASSWORD';
+CREATE USER IF NOT EXISTS 'sample_app'@'%' IDENTIFIED BY '<YOUR_APP_DB_PASSWORD>';
 
 GRANT ALL PRIVILEGES ON sample_app.* TO 'sample_app'@'%';
 
