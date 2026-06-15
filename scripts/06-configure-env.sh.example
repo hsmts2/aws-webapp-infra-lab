@@ -1,0 +1,73 @@
+#!/bin/bash
+# 06-configure-env.sh.example
+# 実行ユーザー: deploy
+# 目的: アプリ実行に必要な環境変数を ~/.bash_profile に追記する。
+# 対象: Webサーバー（web01 / web02）
+#
+# 使い方:
+#   1) このファイルをコピーして実値を埋める（実値版はGit管理しない）
+#        cp 06-configure-env.sh.example 06-configure-env.sh
+#        vi 06-configure-env.sh
+#   2) deploy ユーザーで実行
+#        bash 06-configure-env.sh
+#        source ~/.bash_profile
+#
+# ★重要な注意:
+#   - このファイルには SES SMTP 認証情報・SECRET_KEY_BASE 等の秘匿情報が入る。
+#     実値を埋めた版（06-configure-env.sh）は絶対に Git にコミットしないこと。
+#   - web02 では SECRET_KEY_BASE を web01 と同じ値にする（セッション共有のため）。
+#   - 各エンドポイント（RDS/S3/Redis）は CloudFormation の SSM Parameter Store
+#     から取得できる。下のヒントを参照。
+#
+# SSMから値を引く例（ProjectName=sample の場合）:
+#   RDSエンドポイント:
+#     aws ssm get-parameter --name /sample/rds/endpoint --query Parameter.Value --output text
+#   S3バケット名:
+#     aws ssm get-parameter --name /sample/s3/image-bucket --query Parameter.Value --output text
+#   Redisエンドポイント:
+#     aws ssm get-parameter --name /sample/elasticache/endpoint --query Parameter.Value --output text
+#   RDSパスワード（Secrets Manager管理）:
+#     SECRET_ARN=$(aws ssm get-parameter --name /sample/rds/master-secret-arn --query Parameter.Value --output text)
+#     aws secretsmanager get-secret-value --secret-id "$SECRET_ARN" --query SecretString --output text
+#     （上記JSONの password フィールドが実パスワード）
+
+set -euo pipefail
+
+cat >> ~/.bash_profile << 'EOF'
+
+# ===== Rails本番設定 =====
+export RAILS_ENV=production
+export RAILS_SERVE_STATIC_FILES=1      # ★ALBがPuma直結のため必須。無いとCSSが404になる
+export RAILS_LOG_TO_STDOUT=1
+
+# web01で生成した値を web02 でもそのまま使う（再生成しない）
+export SECRET_KEY_BASE='YOUR_SECRET_KEY_BASE'
+
+# ===== RDS =====
+export AWS_INTRO_SAMPLE_DATABASE_PASSWORD='YOUR_RDS_PASSWORD'
+
+# ===== S3（S3_HOSTはバケット名でなくS3エンドポイント）=====
+export AWS_INTRO_SAMPLE_S3_HOST='s3-ap-northeast-1.amazonaws.com'
+export AWS_INTRO_SAMPLE_S3_REGION='ap-northeast-1'
+export AWS_INTRO_SAMPLE_S3_BUCKET='YOUR_IMAGE_BUCKET_NAME'
+
+# ===== ElastiCache Redis =====
+export AWS_INTRO_SAMPLE_REDIS_ADDRESS='redis://YOUR_REDIS_ENDPOINT:6379/0'
+
+# ===== アプリのホスト名（★メール本文の有効化リンク生成に必須）=====
+# これが無いと、登録は成功するのに有効化メールだけ飛ばない（Missing host to link to!）
+export AWS_INTRO_SAMPLE_HOST='www.zexample.com'
+
+# ===== SMTP（SES）=====
+export AWS_INTRO_SAMPLE_SMTP_DOMAIN='zexample.com'
+export AWS_INTRO_SAMPLE_SMTP_ADDRESS='email-smtp.ap-northeast-1.amazonaws.com'
+export AWS_INTRO_SAMPLE_SMTP_USERNAME='YOUR_SES_SMTP_USERNAME'
+export AWS_INTRO_SAMPLE_SMTP_PASSWORD='YOUR_SES_SMTP_PASSWORD'
+EOF
+
+echo "==> ~/.bash_profile に環境変数を追記しました"
+echo "==> 反映: source ~/.bash_profile"
+echo "==> 確認:"
+echo "      echo \$RAILS_SERVE_STATIC_FILES   # → 1"
+echo "      echo \$AWS_INTRO_SAMPLE_HOST       # → www.zexample.com（角括弧等が混ざっていないこと）"
+echo "      env | grep AWS_INTRO_SAMPLE        # → 10個"

@@ -40,7 +40,7 @@ Puma / Rails on EC2（web01 / web02）
   ├─ S3
   ├─ ElastiCache Redis
   └─ SES ※CloudFormation対象外（手順メモで管理）
-````
+```
 
 確定構成では、ALB は Nginx ではなく Rails/Puma の `3000` 番ポートへ直接転送します。
 そのため、ターゲットグループのポートは `3000` を標準とします。

@@ -1,0 +1,29 @@
+-- 05-create-sample-app-db.sql.example
+-- 目的: サンプルアプリ用のデータベースとアプリ用ユーザーを作成する。
+-- 実行場所: 踏み台(bastion)から RDS(db.home) に接続して、マスターユーザー(admin)で実行。
+-- 実行回数: RDSは共有のため1回だけでよい（web01/web02の両方で実行する必要はない）。
+--
+-- 使い方:
+--   1) このファイルをコピーして実値（パスワード）を埋める。実値版はGit管理しない。
+--        cp 05-create-sample-app-db.sql.example 05-create-sample-app-db.sql
+--        vi 05-create-sample-app-db.sql
+--   2) bastion から RDS に接続して流す。
+--        mysql -u admin -p -h db.home < 05-create-sample-app-db.sql
+--      （admin のパスワードは Secrets Manager 管理。SSMのsecret-arn経由で取得）
+--
+-- 注意:
+--   - アプリは AWS_INTRO_SAMPLE_DATABASE_PASSWORD でこの sample_app ユーザーの
+--     パスワードを参照する。下の値と .bash_profile の値を一致させること。
+--   - db:migrate はアプリ側（deployユーザー、アプリディレクトリ）で別途実行する:
+--       bundle _1.17.3_ exec rails db:migrate RAILS_ENV=production
+
+CREATE DATABASE IF NOT EXISTS sample_app
+  CHARACTER SET utf8mb4
+  COLLATE utf8mb4_general_ci;
+
+-- アプリ用ユーザー（パスワードは実値に置き換える）
+CREATE USER IF NOT EXISTS 'sample_app'@'%' IDENTIFIED BY 'YOUR_APP_DB_PASSWORD';
+
+GRANT ALL PRIVILEGES ON sample_app.* TO 'sample_app'@'%';
+
+FLUSH PRIVILEGES;

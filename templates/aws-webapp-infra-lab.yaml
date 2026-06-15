@@ -1,0 +1,1020 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  aws-webapp-infra-lab - CloudFormation template for the study architecture based on
+  "AWSではじめるインフラ構築入門 第2版". Creates VPC (2 public / 2 private subnets),
+  2 NAT gateways, bastion / web EC2, ALB, RDS for MySQL (password managed by
+  Secrets Manager), S3, ElastiCache for Redis, private Route 53 records, and basic
+  CloudWatch alarms. ACM certificate and public Route 53 records are created only
+  when DomainName and PublicHostedZoneId are supplied.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Project
+        Parameters:
+          - ProjectName
+      - Label:
+          default: Network
+        Parameters:
+          - VpcCidr
+          - PublicSubnet01Cidr
+          - PublicSubnet02Cidr
+          - PrivateSubnet01Cidr
+          - PrivateSubnet02Cidr
+          - YourIpCidr
+      - Label:
+          default: EC2
+        Parameters:
+          - KeyName
+          - LatestAmiId
+          - BastionInstanceType
+          - WebInstanceType
+          - S3AccessMode
+      - Label:
+          default: ALB / Domain (optional)
+        Parameters:
+          - AlbTargetPort
+          - DomainName
+          - PublicHostedZoneId
+      - Label:
+          default: RDS
+        Parameters:
+          - DBInstanceClass
+          - DBEngineVersion
+          - DBAllocatedStorage
+          - DBMasterUsername
+      - Label:
+          default: S3
+        Parameters:
+          - ImageBucketName
+      - Label:
+          default: ElastiCache
+        Parameters:
+          - CacheNodeType
+          - CacheNumNodeGroups
+          - CacheReplicasPerNodeGroup
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: sample
+    AllowedPattern: '^[a-z0-9-]+$'
+    Description: Lowercase project prefix used for resource names. Book examples use sample.
+
+  VpcCidr:
+    Type: String
+    Default: 10.0.0.0/16
+
+  PublicSubnet01Cidr:
+    Type: String
+    Default: 10.0.0.0/20
+
+  PublicSubnet02Cidr:
+    Type: String
+    Default: 10.0.16.0/20
+
+  PrivateSubnet01Cidr:
+    Type: String
+    Default: 10.0.64.0/20
+
+  PrivateSubnet02Cidr:
+    Type: String
+    Default: 10.0.80.0/20
+
+  YourIpCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: SSH source CIDR for the bastion host. Book uses 0.0.0.0/0; replace with your global IP /32 for safety.
+
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: sample-key
+    Description: Existing EC2 key pair name. Book example uses sample-key.
+
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+    Description: Amazon Linux 2 AMI from the public SSM parameter.
+
+  BastionInstanceType:
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - t3.micro
+      - t3.small
+
+  WebInstanceType:
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - t3.micro
+      - t3.small
+
+  S3AccessMode:
+    Type: String
+    Default: LeastPrivilege
+    AllowedValues:
+      - LeastPrivilege
+      - BookFullAccess
+    Description: BookFullAccess attaches AmazonS3FullAccess like the book. LeastPrivilege restricts EC2 to the image bucket only.
+
+  AlbTargetPort:
+    Type: Number
+    Default: 3000
+    AllowedValues:
+      - 80
+      - 3000
+    Description: Book settings use target port 3000 (ALB to Puma directly). Use 80 when routing ALB to Nginx.
+
+  DomainName:
+    Type: String
+    Default: ''
+    Description: Optional. Example zexample.com. Leave EMPTY to skip ACM and public Route 53 records.
+
+  PublicHostedZoneId:
+    Type: String
+    Default: ''
+    Description: Optional. Existing Route 53 public hosted zone ID for DomainName. Leave EMPTY to skip.
+
+  DBInstanceClass:
+    Type: String
+    Default: db.t3.micro
+    AllowedValues:
+      - db.t2.micro
+      - db.t3.micro
+      - db.t4g.micro
+      - db.t3.small
+    Description: Book example uses db.t2.micro. db.t3.micro is the default for easier current deployment.
+
+  DBEngineVersion:
+    Type: String
+    Default: '8.0'
+    Description: Book shows MySQL 8.0.28. Default lets RDS pick a compatible 8.0 minor version.
+
+  DBAllocatedStorage:
+    Type: Number
+    Default: 20
+    MinValue: 20
+    MaxValue: 1000
+
+  DBMasterUsername:
+    Type: String
+    Default: admin
+    AllowedPattern: '^[a-zA-Z][a-zA-Z0-9_]*$'
+    Description: RDS master username. Password is generated and managed by Secrets Manager.
+
+  ImageBucketName:
+    Type: String
+    Default: ''
+    Description: Optional globally unique image bucket name. Leave empty to auto-generate.
+
+  CacheNodeType:
+    Type: String
+    Default: cache.t3.micro
+    AllowedValues:
+      - cache.t3.micro
+      - cache.t4g.micro
+      - cache.t3.small
+
+  CacheNumNodeGroups:
+    Type: Number
+    Default: 2
+    MinValue: 1
+    MaxValue: 3
+    Description: Book settings use 2 shards. Lower values reduce cost.
+
+  CacheReplicasPerNodeGroup:
+    Type: Number
+    Default: 2
+    MinValue: 0
+    MaxValue: 2
+    Description: Book settings use 2 replicas per shard. 0 is cheaper for study.
+
+Conditions:
+  HasDomainConfig: !And
+    - !Not [!Equals [!Ref DomainName, '']]
+    - !Not [!Equals [!Ref PublicHostedZoneId, '']]
+  NoDomainConfig: !Or
+    - !Equals [!Ref DomainName, '']
+    - !Equals [!Ref PublicHostedZoneId, '']
+  HasImageBucketName: !Not [!Equals [!Ref ImageBucketName, '']]
+  HasCacheReplica: !Not [!Equals [!Ref CacheReplicasPerNodeGroup, 0]]
+  UseBookFullS3: !Equals [!Ref S3AccessMode, BookFullAccess]
+  UseLeastPrivilegeS3: !Equals [!Ref S3AccessMode, LeastPrivilege]
+
+Resources:
+
+  # ===================== VPC / Subnets =====================
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-vpc
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-igw
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet01:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicSubnet01Cidr
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-subnet-public01
+
+  PublicSubnet02:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicSubnet02Cidr
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-subnet-public02
+
+  PrivateSubnet01:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnet01Cidr
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-subnet-private01
+
+  PrivateSubnet02:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnet02Cidr
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-subnet-private02
+
+  # ===================== Public routing =====================
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-rt-public
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet01RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet01
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet02RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet02
+      RouteTableId: !Ref PublicRouteTable
+
+  # ===================== NAT (2 gateways, one per AZ) =====================
+  NatGateway01Eip:
+    Type: AWS::EC2::EIP
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-ngw-01-eip
+
+  NatGateway02Eip:
+    Type: AWS::EC2::EIP
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-ngw-02-eip
+
+  NatGateway01:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGateway01Eip.AllocationId
+      SubnetId: !Ref PublicSubnet01
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-ngw-01
+
+  NatGateway02:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGateway02Eip.AllocationId
+      SubnetId: !Ref PublicSubnet02
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-ngw-02
+
+  # ===================== Private routing (per AZ) =====================
+  PrivateRouteTable01:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-rt-private01
+
+  PrivateRouteTable02:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-rt-private02
+
+  PrivateDefaultRoute01:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable01
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway01
+
+  PrivateDefaultRoute02:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable02
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway02
+
+  PrivateSubnet01RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet01
+      RouteTableId: !Ref PrivateRouteTable01
+
+  PrivateSubnet02RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet02
+      RouteTableId: !Ref PrivateRouteTable02
+
+  # ===================== Security Groups =====================
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${ProjectName}-sg-elb
+      GroupDescription: for load balancer
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-sg-elb
+
+  BastionSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${ProjectName}-sg-bastion
+      GroupDescription: for bastion server
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref YourIpCidr
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-sg-bastion
+
+  WebSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${ProjectName}-sg-web
+      GroupDescription: Web server security group
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          SourceSecurityGroupId: !Ref BastionSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-sg-web
+
+  DbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${ProjectName}-sg-db
+      GroupDescription: RDS security group
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref WebSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-sg-db
+
+  CacheSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${ProjectName}-sg-elasticache
+      GroupDescription: ElastiCache Redis security group
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 6379
+          ToPort: 6379
+          SourceSecurityGroupId: !Ref WebSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-sg-elasticache
+
+  # ===================== IAM (Web instance role) =====================
+  WebInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-role-web
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - !If
+          - UseBookFullS3
+          - arn:aws:iam::aws:policy/AmazonS3FullAccess
+          - !Ref AWS::NoValue
+      Policies:
+        - !If
+          - UseLeastPrivilegeS3
+          - PolicyName: image-bucket-access
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - s3:ListBucket
+                  Resource: !GetAtt ImageBucket.Arn
+                - Effect: Allow
+                  Action:
+                    - s3:GetObject
+                    - s3:PutObject
+                    - s3:DeleteObject
+                  Resource: !Sub ${ImageBucket.Arn}/*
+          - !Ref AWS::NoValue
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-role-web
+
+  WebInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub ${ProjectName}-role-web
+      Roles:
+        - !Ref WebInstanceRole
+
+  # ===================== S3 (image bucket) =====================
+  ImageBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !If
+        - HasImageBucketName
+        - !Ref ImageBucketName
+        - !Sub ${ProjectName}-${AWS::AccountId}-${AWS::Region}-upload
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-upload
+
+  # ===================== EC2 (bastion / web) =====================
+  # NOTE: UserData intentionally does NOT install Ruby/Rails/Gems or compile the app.
+  #       Application setup is handled by scripts/web/*.sh after launch.
+  BastionInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref BastionInstanceType
+      KeyName: !Ref KeyName
+      SubnetId: !Ref PublicSubnet01
+      SecurityGroupIds:
+        - !Ref BastionSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-ec2-bastion
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          yum install -y git mysql
+
+  BastionEip:
+    Type: AWS::EC2::EIP
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-bastion-eip
+
+  BastionEipAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId: !GetAtt BastionEip.AllocationId
+      InstanceId: !Ref BastionInstance
+
+  WebInstance01:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref WebInstanceType
+      KeyName: !Ref KeyName
+      IamInstanceProfile: !Ref WebInstanceProfile
+      SubnetId: !Ref PrivateSubnet01
+      SecurityGroupIds:
+        - !Ref WebSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-ec2-web01
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+
+  WebInstance02:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref WebInstanceType
+      KeyName: !Ref KeyName
+      IamInstanceProfile: !Ref WebInstanceProfile
+      SubnetId: !Ref PrivateSubnet02
+      SecurityGroupIds:
+        - !Ref WebSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-ec2-web02
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+
+  # ===================== ALB / Target Group / Listeners =====================
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub ${ProjectName}-elb
+      Type: application
+      Scheme: internet-facing
+      IpAddressType: ipv4
+      SecurityGroups:
+        - !Ref AlbSecurityGroup
+      Subnets:
+        - !Ref PublicSubnet01
+        - !Ref PublicSubnet02
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-elb
+
+  WebTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${ProjectName}-tg
+      VpcId: !Ref VPC
+      Protocol: HTTP
+      Port: !Ref AlbTargetPort
+      TargetType: instance
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /
+      Matcher:
+        HttpCode: 200-399
+      Targets:
+        - Id: !Ref WebInstance01
+          Port: !Ref AlbTargetPort
+        - Id: !Ref WebInstance02
+          Port: !Ref AlbTargetPort
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-tg
+
+  # HTTP:80 forward to target group (used when NO domain is configured)
+  HttpListenerForward:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: NoDomainConfig
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref WebTargetGroup
+
+  # HTTP:80 redirect to HTTPS (used when domain IS configured)
+  HttpListenerRedirect:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: HasDomainConfig
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig:
+            Protocol: HTTPS
+            Port: '443'
+            Host: '#{host}'
+            Path: '/#{path}'
+            Query: '#{query}'
+            StatusCode: HTTP_301
+
+  AcmCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Condition: HasDomainConfig
+    Properties:
+      DomainName: !Sub www.${DomainName}
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Sub www.${DomainName}
+          HostedZoneId: !Ref PublicHostedZoneId
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-certificate
+
+  HttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: HasDomainConfig
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Protocol: HTTPS
+      Port: 443
+      Certificates:
+        - CertificateArn: !Ref AcmCertificate
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref WebTargetGroup
+
+  # ===================== RDS (MySQL, Secrets Manager managed password) =====================
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupName: !Sub ${ProjectName}-db-subnet
+      DBSubnetGroupDescription: sample db subnet
+      SubnetIds:
+        - !Ref PrivateSubnet01
+        - !Ref PrivateSubnet02
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-db-subnet
+
+  DBParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Description: sample parameter group
+      Family: mysql8.0
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-db-pg
+
+  DBOptionGroup:
+    Type: AWS::RDS::OptionGroup
+    Properties:
+      EngineName: mysql
+      MajorEngineVersion: '8.0'
+      OptionGroupDescription: sample option group
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-db-og
+
+  DBInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub ${ProjectName}-db
+      Engine: mysql
+      EngineVersion: !Ref DBEngineVersion
+      DBInstanceClass: !Ref DBInstanceClass
+      AllocatedStorage: !Ref DBAllocatedStorage
+      StorageType: gp3
+      MasterUsername: !Ref DBMasterUsername
+      # Password is generated and stored in Secrets Manager automatically.
+      ManageMasterUserPassword: true
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      DBParameterGroupName: !Ref DBParameterGroup
+      OptionGroupName: !Ref DBOptionGroup
+      VPCSecurityGroups:
+        - !Ref DbSecurityGroup
+      PubliclyAccessible: false
+      MultiAZ: false
+      BackupRetentionPeriod: 1
+      DeletionProtection: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-db
+
+  # ===================== ElastiCache (Redis) =====================
+  CacheSubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
+    Properties:
+      Description: !Sub ${ProjectName} ElastiCache subnet group
+      CacheSubnetGroupName: !Sub ${ProjectName}-elasticache-sg
+      SubnetIds:
+        - !Ref PrivateSubnet01
+        - !Ref PrivateSubnet02
+
+  RedisReplicationGroup:
+    Type: AWS::ElastiCache::ReplicationGroup
+    Properties:
+      ReplicationGroupId: !Sub ${ProjectName}-elasticache
+      ReplicationGroupDescription: Sample ElastiCache
+      Engine: redis
+      EngineVersion: '6.2'
+      CacheNodeType: !Ref CacheNodeType
+      CacheSubnetGroupName: !Ref CacheSubnetGroup
+      SecurityGroupIds:
+        - !Ref CacheSecurityGroup
+      NumNodeGroups: !Ref CacheNumNodeGroups
+      ReplicasPerNodeGroup: !Ref CacheReplicasPerNodeGroup
+      AutomaticFailoverEnabled: !If [HasCacheReplica, true, false]
+      MultiAZEnabled: !If [HasCacheReplica, true, false]
+      AtRestEncryptionEnabled: false
+      TransitEncryptionEnabled: false
+      Port: 6379
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-elasticache
+
+  # ===================== Route 53 (private hosted zone "home") =====================
+  PrivateHostedZoneHome:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name: home
+      VPCs:
+        - VPCId: !Ref VPC
+          VPCRegion: !Ref AWS::Region
+      HostedZoneConfig:
+        Comment: Private hosted zone for the study VPC.
+
+  BastionHomeRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref PrivateHostedZoneHome
+      Name: bastion.home.
+      Type: A
+      TTL: 60
+      ResourceRecords:
+        - !GetAtt BastionInstance.PrivateIp
+
+  Web01HomeRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref PrivateHostedZoneHome
+      Name: web01.home.
+      Type: A
+      TTL: 60
+      ResourceRecords:
+        - !GetAtt WebInstance01.PrivateIp
+
+  Web02HomeRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref PrivateHostedZoneHome
+      Name: web02.home.
+      Type: A
+      TTL: 60
+      ResourceRecords:
+        - !GetAtt WebInstance02.PrivateIp
+
+  DbHomeRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref PrivateHostedZoneHome
+      Name: db.home.
+      Type: CNAME
+      TTL: 60
+      ResourceRecords:
+        - !GetAtt DBInstance.Endpoint.Address
+
+  CacheHomeRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref PrivateHostedZoneHome
+      Name: cache.home.
+      Type: CNAME
+      TTL: 60
+      ResourceRecords:
+        - !GetAtt RedisReplicationGroup.ConfigurationEndPoint.Address
+
+  # ===================== Route 53 (public records, only with domain) =====================
+  PublicWwwRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasDomainConfig
+    Properties:
+      HostedZoneId: !Ref PublicHostedZoneId
+      Name: !Sub www.${DomainName}.
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt ApplicationLoadBalancer.DNSName
+        HostedZoneId: !GetAtt ApplicationLoadBalancer.CanonicalHostedZoneID
+
+  PublicBastionRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasDomainConfig
+    Properties:
+      HostedZoneId: !Ref PublicHostedZoneId
+      Name: !Sub bastion.${DomainName}.
+      Type: A
+      TTL: 60
+      ResourceRecords:
+        - !Ref BastionEip
+
+  # ===================== SSM Parameter Store (key endpoints / secret ARN) =====================
+  DbMasterSecretArnParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${ProjectName}/rds/master-secret-arn
+      Type: String
+      Value: !GetAtt DBInstance.MasterUserSecret.SecretArn
+      Description: ARN of the RDS master user secret managed by Secrets Manager.
+
+  DbEndpointParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${ProjectName}/rds/endpoint
+      Type: String
+      Value: !GetAtt DBInstance.Endpoint.Address
+      Description: RDS endpoint address.
+
+  ImageBucketNameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${ProjectName}/s3/image-bucket
+      Type: String
+      Value: !Ref ImageBucket
+      Description: Image upload bucket name.
+
+  RedisEndpointParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${ProjectName}/elasticache/endpoint
+      Type: String
+      Value: !GetAtt RedisReplicationGroup.ConfigurationEndPoint.Address
+      Description: ElastiCache Redis configuration endpoint.
+
+  AlbDnsNameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${ProjectName}/alb/dns-name
+      Type: String
+      Value: !GetAtt ApplicationLoadBalancer.DNSName
+      Description: ALB DNS name.
+
+  # ===================== CloudWatch (basic alarms) =====================
+  Web01CpuHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${ProjectName}-web01-cpu-high
+      AlarmDescription: Web01 CPU utilization is high.
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref WebInstance01
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  AlbTarget5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${ProjectName}-alb-5xx
+      AlarmDescription: ALB target 5xx responses detected.
+      Namespace: AWS/ApplicationELB
+      MetricName: HTTPCode_Target_5XX_Count
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !GetAtt ApplicationLoadBalancer.LoadBalancerFullName
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+Outputs:
+  VpcId:
+    Description: VPC ID
+    Value: !Ref VPC
+
+  AlbDnsName:
+    Description: ALB DNS name
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
+
+  WebsiteUrl:
+    Description: Website URL (https when a domain is set, otherwise the ALB DNS over http)
+    Value: !If
+      - HasDomainConfig
+      - !Sub https://www.${DomainName}
+      - !Sub http://${ApplicationLoadBalancer.DNSName}
+
+  BastionPublicIp:
+    Description: Bastion public IP (EIP)
+    Value: !Ref BastionEip
+
+  BastionSshHost:
+    Description: Bastion SSH host
+    Value: !If
+      - HasDomainConfig
+      - !Sub bastion.${DomainName}
+      - !Ref BastionEip
+
+  Web01PrivateIp:
+    Value: !GetAtt WebInstance01.PrivateIp
+
+  Web02PrivateIp:
+    Value: !GetAtt WebInstance02.PrivateIp
+
+  DbEndpoint:
+    Description: RDS endpoint (also available as db.home in the VPC)
+    Value: !GetAtt DBInstance.Endpoint.Address
+
+  DbMasterSecretArn:
+    Description: Secrets Manager ARN holding the RDS master credentials
+    Value: !GetAtt DBInstance.MasterUserSecret.SecretArn
+
+  ImageBucketName:
+    Value: !Ref ImageBucket
+
+  RedisEndpoint:
+    Description: ElastiCache Redis configuration endpoint (also cache.home in the VPC)
+    Value: !GetAtt RedisReplicationGroup.ConfigurationEndPoint.Address

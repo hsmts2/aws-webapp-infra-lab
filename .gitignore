@@ -6,10 +6,10 @@ parameters/*.env
 !parameters/*.example.env
 
 # 実値を埋めた環境変数スクリプト（SES認証情報・SECRET_KEY_BASE等を含む）
-scripts/web/05-configure-env.sh
+scripts/06-configure-env.sh
 
 # 実値を埋めたDB初期化SQL（パスワードを含む）
-scripts/db/create-sample-app-db.sql
+scripts/05-create-sample-app-db.sql
 
 # .bash_profile の実体
 **/.bash_profile
