@@ -154,9 +154,7 @@ aws-webapp-infra-lab/
 
 CloudFormation テンプレートは以下に格納しています。
 
-```text
-templates/aws-webapp-infra-lab.yaml
-```
+[templates/aws-webapp-infra-lab.yaml](templates/aws-webapp-infra-lab.yaml)
 
 このテンプレートでは、VPC、サブネット、踏み台サーバー、Web サーバー、ALB、RDS、S3、ElastiCache、Secrets Manager、Systems Manager Parameter Store などをまとめて作成します。
 
@@ -168,10 +166,10 @@ templates/aws-webapp-infra-lab.yaml
 
 パラメータファイルのサンプルは以下に格納しています。
 
-```text
-parameters/study.example.env
-parameters/study.example.json
-```
+| ファイル | 用途 |
+| --- | --- |
+| [parameters/study.example.env](parameters/study.example.env) | `aws cloudformation deploy` の `--parameter-overrides` で使用するサンプル |
+| [parameters/study.example.json](parameters/study.example.json) | CloudFormation パラメータJSON形式のサンプル |
 
 実際にデプロイする場合は、サンプルファイルをコピーして使用します。
 

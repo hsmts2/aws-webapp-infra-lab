@@ -89,8 +89,7 @@ Parameters:
 
   KeyName:
     Type: AWS::EC2::KeyPair::KeyName
-    Default: sample-key
-    Description: Existing EC2 key pair name. Book example uses sample-key.
+    Description: Existing EC2 key pair name.
 
   LatestAmiId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
@@ -132,7 +131,7 @@ Parameters:
   DomainName:
     Type: String
     Default: ''
-    Description: Optional. Example zexample.com. Leave EMPTY to skip ACM and public Route 53 records.
+    Description: Optional. Set your domain name. Leave EMPTY to skip ACM and public Route 53 records.
 
   PublicHostedZoneId:
     Type: String
